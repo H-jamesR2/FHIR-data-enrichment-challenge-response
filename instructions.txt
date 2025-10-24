@@ -1,0 +1,43 @@
+# 🚀 Python Environment Setup Instructions
+
+# 🐍 Option 1: Standard 'venv' (Built-in)
+
+## 1. Create the Environment
+# Use 'python3' or a specific version like 'python3.11'
+python3 -m venv venv
+
+## 2. Activate the Environment
+# This must be run for every new terminal session.
+
+# 🐧 Mac/Linux (Bash/Zsh)
+source venv/bin/activate
+
+# 🖥️ Windows (Command Prompt)
+.\venv\Scripts\activate.bat
+
+# 💻 Windows (PowerShell)
+.\venv\Scripts\Activate.ps1
+
+## 3. Install Dependencies
+# Install packages from a file
+pip install -r requirements.txt
+
+# Generate requirements file (if needed)
+pip freeze > requirements.txt
+
+---
+# ✨ Option 2: Using 'uv' (Modern Alternative - faster setup)
+
+# 1. Create and Activate the Environment (uv creates a '.venv' folder)
+# NOTE: uv is a separate tool that must be installed first.
+uv venv
+
+# 2. Activate the Environment
+# 🐧 Mac/Linux (Bash/Zsh)
+source .venv/bin/activate
+
+# 3. Install Dependencies
+uv pip install -r requirements.txt
+
+# Generate requirements if needed
+uv pip freeze > requirements.txt
