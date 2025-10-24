@@ -22,27 +22,42 @@ BASE_URL = 'https://synthea-proxy-389841612478.us-central1.run.app/'
 
 # --- API Client Functions ---
 
-def fetch_observations_for_subject(subject: str) -> dict:
+def fetch_observations_for_subject(subject, start_date=None, end_date=None) -> list:
     """Fetches all Observation resources for a given patient subject."""
     url = f"{BASE_URL}Observation?subject={subject}"
+    if start_date: url += f"&date=ge{start_date}"
+    if end_date: url += f"&date=le{end_date}"
     print(f"Fetching Observations from: {url}")
     response = requests.get(url)
     response.raise_for_status()
     return response.json()
 
-def fetch_medication_administrations_for_subject(subject: str) -> dict:
+def fetch_medication_administrations_for_subject(subject, start_date=None, end_date=None) -> list:
     """Fetches all MedicationAdministration resources for a given patient subject."""
     url = f"{BASE_URL}MedicationAdministration?subject={subject}"
+    if start_date: url += f"&effective-time=ge{start_date}"
+    if end_date: url += f"&effective-time=le{end_date}"
     print(f"Fetching MedAdmins from: {url}")
     response = requests.get(url)
     response.raise_for_status()
     return response.json()
 
+# JSON File Saving Function ---
+
+def save_json_output(data: dict | list, filename: str):
+    """Saves the provided data as a JSON file."""
+    try:
+        with open(filename, 'w') as f:
+            json.dump(data, f, indent=2)
+        print(f"Successfully saved raw data to {filename}")
+    except Exception as e:
+        print(f"Error saving data to {filename}: {e}")
+
+
 
 def main():
     """Main execution function."""
     
-    # Per the new data source
     PATIENT_IDS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']
     
     all_obs = []
@@ -53,20 +68,32 @@ def main():
     print("Starting Phase 1: Fetching and parsing FHIR data from API...")
     for pid in PATIENT_IDS:
         try:
-            # 1. Fetch raw FHIR bundles from API
-            obs_bundle_dict = fetch_observations_for_subject(subject=pid)
-            med_bundle_dict = fetch_medication_administrations_for_subject(subject=pid)
-
-            obs_bundle = Bundle(obs_bundle_dict)
-            med_bundle = Bundle(med_bundle_dict)
+            # 1. Fetch raw FHIR resource lists from API
+            obs_list = fetch_observations_for_subject(subject=pid)
+            med_list = fetch_medication_administrations_for_subject(subject=pid)
             
-            # 2. Parse Observations and get patient weight
-            # We assume weight is in the Observation bundle
+            # FIX: The API returns a list of resources (JSON array) instead of 
+            # a Bundle object (JSON dictionary). We manually create the Bundle 
+            # structure needed for Pydantic validation.
+            obs_bundle_dict = {
+                "resourceType": "Bundle",
+                "entry": [{"resource": res} for res in obs_list]
+            }
+            med_bundle_dict = {
+                "resourceType": "Bundle",
+                "entry": [{"resource": res} for res in med_list]
+            }
+
+            # 2. Validate and parse the new Bundle dictionary structures
+            obs_bundle = Bundle.model_validate(obs_bundle_dict)
+            med_bundle = Bundle.model_validate(med_bundle_dict)
+            
+            # 3. Parse Observations and get patient weight
             obs_df, weight_kg = fhir_parser.parse_observations(obs_bundle, pid)
             all_obs.append(obs_df)
             patient_weights[pid] = weight_kg
             
-            # 3. Parse Medications
+            # 4. Parse Medications
             med_df = fhir_parser.parse_medications(med_bundle, pid)
             all_meds.append(med_df)
             
@@ -78,8 +105,16 @@ def main():
             print(f"FATAL: Failed to process patient {pid}. Error: {e}")
 
     # Combine all patient data into single DataFrames
-    master_obs_df = pd.concat(all_obs, ignore_index=True)
-    master_med_df = pd.concat(all_meds, ignore_index=True)
+    if not all_obs:
+        print("Error: No observation data was successfully parsed. Exiting.")
+        master_obs_df = pd.DataFrame(columns=["patient_id", "datetime", "name", "value"])
+    else:
+        master_obs_df = pd.concat(all_obs, ignore_index=True)
+    
+    if not all_meds:
+         master_med_df = pd.DataFrame(columns=["patient_id", "start_time", "end_time", "name", "rate_mg_hr"])
+    else:
+        master_med_df = pd.concat(all_meds, ignore_index=True)
     
     print("\nFHIR data fetching and parsing complete.")
     
@@ -90,6 +125,7 @@ def main():
         print("Warning: No observation data was parsed. Cannot calculate scores.")
         submission_results = []
     else:
+        # Find all unique times an observation occurred across all patients
         event_timestamps = master_obs_df[["patient_id", "datetime"]].drop_duplicates()
         submission_results = []
 
@@ -99,7 +135,8 @@ def main():
             
             patient_obs = master_obs_df[master_obs_df["patient_id"] == pid]
             patient_meds = master_med_df[master_med_df["patient_id"] == pid]
-            patient_weight = patient_weights[pid]
+            # Use patient_weights[pid] for the weight in the calculation (defaulting to 70kg if missing)
+            patient_weight = patient_weights.get(pid, 70.0) 
             
             sofa_score = sofa_calculator.calculate_sofa_at_time(
                 patient_obs=patient_obs,
